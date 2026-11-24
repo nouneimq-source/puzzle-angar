@@ -14,6 +14,11 @@
   // ---------- выбор источника ----------
   let source = null; // { kind, name, aspect, draw(w,h)->canvas, maxSide }
   let count = 500;
+  let mode = store.get('pa_mode') === 'real' ? 'real' : 'normal';
+  document.querySelectorAll('.mode-opt').forEach((b) => {
+    b.setAttribute('aria-pressed', b.dataset.mode === mode);
+    b.addEventListener('click', () => { mode = b.dataset.mode; store.set('pa_mode', mode); document.querySelectorAll('.mode-opt').forEach((x) => x.setAttribute('aria-pressed', x === b)); });
+  });
 
   document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach((x) => x.setAttribute('aria-selected', x === t));
@@ -155,19 +160,23 @@
     let side = targetSide(g.count);
     if (source.srcW) side = Math.min(side, Math.max(source.srcW, source.srcH));
     if (source.maxSide) side = Math.min(side, source.maxSide);
-    const W = g.cols >= g.rows ? side : Math.round(side * g.cols / g.rows);
-    const H = g.cols >= g.rows ? Math.round(side * g.rows / g.cols) : side;
+    let W = g.cols >= g.rows ? side : Math.round(side * g.cols / g.rows);
+    let H = g.cols >= g.rows ? Math.round(side * g.rows / g.cols) : side;
+    // Safari на iPhone не создаёт canvas больше ~16 млн пикселей
+    const MAXPX = 16000000;
+    if (W * H > MAXPX) { const k = Math.sqrt(MAXPX / (W * H)); W = Math.floor(W * k); H = Math.floor(H * k); }
     $('busy').hidden = false; $('busy-text').textContent = 'Режем картинку…';
     await new Promise((r) => setTimeout(r, 50));
     try {
       const full = source.draw(W, H);
       const image = full.toDataURL('image/jpeg', 0.9);
+      if (!image || image.length < 100) throw new Error('браузер не смог подготовить картинку, попробуй меньше кусочков');
       const tw = 480, th = Math.round(480 * H / W);
       const t = document.createElement('canvas'); t.width = tw; t.height = th;
       t.getContext('2d').drawImage(full, 0, 0, tw, th);
       const thumb = t.toDataURL('image/jpeg', 0.8);
       $('busy-text').textContent = 'Загружаем в ангар…';
-      const res = await fetch('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('room-name').value.trim() || source.name, cols: g.cols, rows: g.rows, image, thumb, kind: source.kind }) });
+      const res = await fetch('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('room-name').value.trim() || source.name, cols: g.cols, rows: g.rows, image, thumb, kind: source.kind, mode }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Ошибка');
       location.href = '/r/' + data.id;
@@ -186,6 +195,7 @@
     if (r.online) addB(`● ${r.online} в ангаре`, 'live');
     if (r.completedAt) addB('Собран', 'done');
     if (r.kind === 'darklay') addB('Darklay');
+    addB(r.mode === 'normal' ? 'Обычный' : 'Реализм');
     th.appendChild(badge); el.appendChild(th);
     const info = document.createElement('div'); info.className = 'info';
     const h = document.createElement('h3'); h.textContent = r.name; info.appendChild(h);

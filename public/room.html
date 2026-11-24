@@ -23,6 +23,9 @@
   .title a { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: var(--accent); flex: none; }
   .title-text { min-width: 0; }
   .title h1 { font: 700 14px/1.2 var(--font-display); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 34vw; }
+  .name-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .mode { flex: none; font: 700 9.5px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; padding: 4px 6px; border-radius: 4px; background: var(--panel-2); color: var(--accent); border: 1px solid var(--line); }
+  .mode:empty { display: none; }
   .prog { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
   .prog .bar { width: 120px; height: 5px; border-radius: 3px; background: #ffffff14; overflow: hidden; }
   .prog .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
@@ -101,7 +104,7 @@
   <div class="title chip">
     <a href="/" title="В лобби" aria-label="В лобби"><svg width="22" height="22" viewBox="0 0 38 38" aria-hidden="true"><path d="M3 17 19 5l16 12v18H3z" fill="#1a1404"/><path d="M12 24h6v3.2a2.2 2.2 0 1 0 0 3.6V35h-6z" fill="#ffb51f"/></svg></a>
     <div class="title-text">
-      <h1 id="name">Загрузка…</h1>
+      <div class="name-row"><h1 id="name">Загрузка…</h1><span class="mode" id="mode-chip"></span></div>
       <div class="prog"><div class="bar"><i id="bar"></i></div><span id="prog-text">0%</span></div>
     </div>
   </div>
@@ -124,6 +127,7 @@
   <span class="sep"></span>
   <button class="tb wide" id="edges" aria-pressed="false" title="Только края (E)"><span>Края</span></button>
   <button class="tb wide" id="ghost" aria-pressed="false" title="Подсказка на поле (G)"><span>Подсказка</span></button>
+  <button class="tb wide" id="arrange" aria-pressed="false" title="Разложить свободные кусочки рядами"><span>Разложить</span></button>
   <button class="tb wide" id="pic" aria-pressed="false" title="Картинка (P)"><span>Картинка</span></button>
   <span class="sep"></span>
   <button class="tb" id="bg" title="Цвет стола" aria-label="Цвет стола"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="currentColor" stroke="currentColor" stroke-opacity=".9" stroke-width="2" id="bg-dot" style="stroke:var(--fg)"/></svg></button>

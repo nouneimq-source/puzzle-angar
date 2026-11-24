@@ -62,6 +62,13 @@
   .presets button[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   .hint { color: var(--muted); font-size: 13px; }
   .hint.warn { color: var(--accent); }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .mode-opt { text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg-2); cursor: pointer; display: grid; gap: 3px; }
+  .mode-opt b { font: 700 14px var(--font-display); }
+  .mode-opt small { color: var(--muted); font-size: 12px; line-height: 1.35; }
+  .mode-opt[aria-pressed=true] { border-color: var(--accent); background: #ffb51f12; }
+  .mode-opt[aria-pressed=true] b { color: var(--accent); }
+  @media (max-width: 420px) { .modes { grid-template-columns: 1fr; } }
   .create-row { display: flex; gap: 10px; flex-wrap: wrap; }
   .create-row input { flex: 1 1 200px; }
   .create-row .btn { flex: 0 0 auto; padding: 11px 20px; }
@@ -149,6 +156,14 @@
           <input id="count-range" type="range" min="0" max="1000" step="1" aria-label="Количество кусочков">
           <div class="presets" id="presets"></div>
           <div class="hint" id="count-hint"></div>
+        </div>
+
+        <div class="count-row">
+          <span class="label">Режим</span>
+          <div class="modes" id="modes">
+            <button type="button" class="mode-opt" data-mode="normal" aria-pressed="true"><b>Обычный</b><small>Кусок, поставленный на своё место, фиксируется и больше не двигается</small></button>
+            <button type="button" class="mode-opt" data-mode="real" aria-pressed="false"><b>Реализм</b><small>Никаких подсказок: всё как с настоящим пазлом на столе</small></button>
+          </div>
         </div>
 
         <div class="create-row">

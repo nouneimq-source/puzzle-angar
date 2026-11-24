@@ -1,4 +1,4 @@
-﻿// Puzzle Angar — сервер: статика, API комнат, WebSocket для совместной сборки
+// Puzzle Angar — сервер: статика, API комнат, WebSocket для совместной сборки
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -64,7 +64,8 @@ class Room {
     this.saveTimer = null;
     if (state) {
       for (let p = 0; p < N; p++) this.groupOf[p] = state.groupOf[p];
-      for (let i = 0; i < state.groups.length; i += 3) this.groups.set(state.groups[i], { x: state.groups[i + 1], y: state.groups[i + 2], pieces: [], holder: null });
+      const st = state.v === 2 ? 4 : 3;
+      for (let i = 0; i < state.groups.length; i += st) this.groups.set(state.groups[i], { x: state.groups[i + 1], y: state.groups[i + 2], pieces: [], holder: null, locked: st === 4 && state.groups[i + 3] === 1 });
       for (let p = 0; p < N; p++) this.groups.get(this.groupOf[p]).pieces.push(p);
     } else {
       const pos = scatter(meta.cols, meta.rows, meta.seed);
@@ -72,14 +73,58 @@ class Room {
         const c = p % meta.cols, r = (p / meta.cols) | 0;
         this.groupOf[p] = p;
         // x,y группы = положение клетки (0,0) решётки этой группы
-        this.groups.set(p, { x: pos[p * 2] - c, y: pos[p * 2 + 1] - r, pieces: [p], holder: null });
+        this.groups.set(p, { x: pos[p * 2] - c, y: pos[p * 2 + 1] - r, pieces: [p], holder: null, locked: false });
       }
     }
   }
   serialize() {
     const g = [];
-    for (const [id, G] of this.groups) g.push(id, +G.x.toFixed(4), +G.y.toFixed(4));
-    return { groupOf: Array.from(this.groupOf), groups: g };
+    for (const [id, G] of this.groups) g.push(id, +G.x.toFixed(4), +G.y.toFixed(4), G.locked ? 1 : 0);
+    return { v: 2, groupOf: Array.from(this.groupOf), groups: g };
+  }
+  // «Разложить»: одиночные свободные кусочки встают ровными рядами вокруг поля, края — ближе к полю
+  arrange() {
+    const { cols, rows } = this.meta;
+    const cell = 1.78, pad = 0.6;
+    const occ = new Set();
+    const key = (i, j) => i + ',' + j;
+    const singles = [];
+    for (const [gid, G] of this.groups) {
+      if (G.pieces.length === 1 && !G.holder && !G.locked) { singles.push(gid); continue; }
+      for (const p of G.pieces) {
+        const px = G.x + (p % cols), py = G.y + ((p / cols) | 0);
+        for (let i = Math.floor((px - 0.45) / cell); i <= Math.floor((px + 1.45) / cell); i++)
+          for (let j = Math.floor((py - 0.45) / cell); j <= Math.floor((py + 1.45) / cell); j++) occ.add(key(i, j));
+      }
+    }
+    if (!singles.length) return [];
+    const isEdge = (p) => { const c = p % cols, r = (p / cols) | 0; return c === 0 || r === 0 || c === cols - 1 || r === rows - 1; };
+    for (let i = singles.length - 1; i > 0; i--) { const k = Math.floor(Math.random() * (i + 1)); [singles[i], singles[k]] = [singles[k], singles[i]]; }
+    singles.sort((a, b) => isEdge(b) - isEdge(a));
+    // свободные клетки кольцами вокруг поля
+    const cells = [];
+    for (let ring = 0; cells.length < singles.length && ring < 2000; ring++) {
+      const i0 = Math.floor(-pad / cell) - 1 - ring, i1 = Math.ceil((cols + pad) / cell) + ring;
+      const j0 = Math.floor(-pad / cell) - 1 - ring, j1 = Math.ceil((rows + pad) / cell) + ring;
+      const ringCells = [];
+      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+        if (i !== i0 && i !== i1 && j !== j0 && j !== j1) continue;
+        const x = i * cell, y = j * cell;
+        if (x + cell > -pad && x < cols + pad && y + cell > -pad && y < rows + pad) continue;
+        if (occ.has(key(i, j))) continue;
+        ringCells.push([x, y]);
+      }
+      ringCells.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+      for (const c of ringCells) cells.push(c);
+    }
+    const out = [];
+    singles.forEach((gid, k) => {
+      const G = this.groups.get(gid), c = gid % cols, r = (gid / cols) | 0;
+      const [x, y] = cells[k];
+      G.x = +(x + (cell - 1) / 2 - c).toFixed(4); G.y = +(y + (cell - 1) / 2 - r).toFixed(4);
+      out.push(gid, G.x, G.y);
+    });
+    return out;
   }
   progress() { return this.N <= 1 ? 1 : (this.N - this.groups.size) / (this.N - 1); }
   scheduleSave() {
@@ -121,7 +166,8 @@ class Room {
           const H = this.groups.get(h);
           if (H.holder) continue;
           if (Math.abs(H.x - G.x) < SNAP && Math.abs(H.y - G.y) < SNAP) {
-            const bigId = H.pieces.length >= G.pieces.length ? h : cur;
+            // зафиксированная на поле группа всегда остаётся на месте
+            const bigId = H.locked !== G.locked ? (H.locked ? h : cur) : (H.pieces.length >= G.pieces.length ? h : cur);
             const smallId = bigId === h ? cur : h;
             const big = this.groups.get(bigId), small = this.groups.get(smallId);
             for (const p2 of small.pieces) { this.groupOf[p2] = bigId; big.pieces.push(p2); }
@@ -134,7 +180,13 @@ class Room {
       }
       break;
     }
-    return { merges, gid: cur };
+    // обычный режим: кусок на своём месте фиксируется
+    const F = this.groups.get(cur);
+    let locked = false;
+    if (this.meta.mode === 'normal' && !F.locked && Math.abs(F.x) < SNAP && Math.abs(F.y) < SNAP) {
+      F.x = 0; F.y = 0; F.locked = true; locked = true;
+    }
+    return { merges, gid: cur, locked, fin: [cur, F.x, F.y, F.locked ? 1 : 0] };
   }
 }
 
@@ -181,7 +233,7 @@ function decodeImage(dataUrl) {
 
 function publicMeta(m) {
   const room = live.get(m.id);
-  return { id: m.id, name: m.name, cols: m.cols, rows: m.rows, pieces: m.cols * m.rows, image: m.image, thumb: m.thumb, kind: m.kind, created: m.created, updated: m.updated, progress: room ? room.progress() : (m.progress || 0), online: room ? room.clients.size : 0, completedAt: m.completedAt || null };
+  return { id: m.id, name: m.name, cols: m.cols, rows: m.rows, pieces: m.cols * m.rows, image: m.image, thumb: m.thumb, kind: m.kind, created: m.created, updated: m.updated, progress: room ? room.progress() : (m.progress || 0), online: room ? room.clients.size : 0, completedAt: m.completedAt || null, mode: m.mode || 'real' };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -201,7 +253,7 @@ const server = http.createServer(async (req, res) => {
       const id = crypto.randomBytes(4).toString('hex');
       fs.writeFileSync(path.join(IMG_DIR, id + '.' + img.ext), img.buf);
       fs.writeFileSync(path.join(IMG_DIR, id + '-t.' + th.ext), th.buf);
-      const meta = { id, name: String(body.name || 'Пазл').slice(0, 60), cols, rows, seed: crypto.randomBytes(4).readUInt32LE(0), image: id + '.' + img.ext, thumb: id + '-t.' + th.ext, kind: ['upload', 'gallery', 'darklay'].includes(body.kind) ? body.kind : 'upload', created: Date.now(), updated: Date.now(), progress: 0, stats: {} };
+      const meta = { id, name: String(body.name || 'Пазл').slice(0, 60), cols, rows, seed: crypto.randomBytes(4).readUInt32LE(0), image: id + '.' + img.ext, thumb: id + '-t.' + th.ext, kind: ['upload', 'gallery', 'darklay'].includes(body.kind) ? body.kind : 'upload', mode: body.mode === 'real' ? 'real' : 'normal', created: Date.now(), updated: Date.now(), progress: 0, stats: {} };
       metas.set(id, meta);
       writeMeta(meta);
       return json(res, 200, { id });
@@ -322,7 +374,7 @@ function attach(ws, roomId) {
     for (const [gid, G] of room.groups) if (G.holder === player.id) {
       G.holder = null;
       const r = room.snap(gid);
-      room.broadcast({ t: 'drop', g: gid, x: G.x, y: G.y, merges: r.merges, by: player.id });
+      room.broadcast({ t: 'drop', g: gid, x: G.x, y: G.y, merges: r.merges, fin: r.fin, by: player.id });
     }
   };
 
@@ -341,6 +393,7 @@ function attach(ws, roomId) {
       case 'grab': {
         const G = room.groups.get(msg.g);
         if (!G) return ws.send(JSON.stringify({ t: 'deny', g: msg.g }));
+        if (G.locked) return ws.send(JSON.stringify({ t: 'deny', g: msg.g, x: G.x, y: G.y, locked: true }));
         if (G.holder && G.holder !== player.id) return ws.send(JSON.stringify({ t: 'deny', g: msg.g, x: G.x, y: G.y }));
         // одна группа в руках за раз
         for (const [gid, H] of room.groups) if (H.holder === player.id && gid !== msg.g) H.holder = null;
@@ -361,16 +414,25 @@ function attach(ws, roomId) {
         if (isFinite(msg.x) && isFinite(msg.y)) { G.x = +msg.x; G.y = +msg.y; }
         G.holder = null;
         const r = room.snap(msg.g);
-        if (r.merges.length) {
+        const pts = r.merges.length + (r.locked ? 1 : 0);
+        if (pts) {
           room.meta.stats = room.meta.stats || {};
-          room.meta.stats[player.name] = (room.meta.stats[player.name] || 0) + r.merges.length;
+          room.meta.stats[player.name] = (room.meta.stats[player.name] || 0) + pts;
         }
-        room.broadcast({ t: 'drop', g: msg.g, x: G.x, y: G.y, merges: r.merges, by: player.id, stats: r.merges.length ? room.meta.stats : undefined });
+        room.broadcast({ t: 'drop', g: msg.g, x: G.x, y: G.y, merges: r.merges, fin: r.fin, by: player.id, stats: pts ? room.meta.stats : undefined });
         if (r.merges.length && room.groups.size === 1 && !room.meta.completedAt) {
           room.meta.completedAt = Date.now();
           room.broadcast({ t: 'done', at: room.meta.completedAt, stats: room.meta.stats });
           room.save();
         } else room.scheduleSave();
+        break;
+      }
+      case 'arrange': {
+        const now = Date.now();
+        if (now - (room.lastArrange || 0) < 3000) return;
+        room.lastArrange = now;
+        const moved = room.arrange();
+        if (moved.length) { room.broadcast({ t: 'arrange', g: moved, by: player.id, name: player.name }); room.scheduleSave(); }
         break;
       }
       case 'cursor': {

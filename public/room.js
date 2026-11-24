@@ -31,33 +31,46 @@
   let sound = store.get('pa_sound') !== '0';
   let dLo = Infinity, dHi = -1, needs = true, fullUpload = true;
 
-  // ---------- WebGL ----------
+  // ---------- WebGL (WebGL2, а на старых устройствах — WebGL1) ----------
   const canvas = $('gl'), ov = $('ov'), octx = ov.getContext('2d');
-  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: true, preserveDrawingBuffer: false });
-  if (!gl) { $('load-text').textContent = 'Браузер не поддерживает WebGL2. Открой сайт в свежем Chrome, Edge, Firefox или Safari.'; return; }
+  const glOpts = { antialias: false, alpha: false, premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' };
+  let gl = null;
+  try { gl = canvas.getContext('webgl2', glOpts); } catch (e) {}
+  if (!gl) { try { gl = canvas.getContext('webgl', glOpts) || canvas.getContext('experimental-webgl', glOpts); } catch (e) {} }
+  const isGL2 = !!gl && typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+  const instExt = gl && !isGL2 ? gl.getExtension('ANGLE_instanced_arrays') : null;
+  if (!gl || (!isGL2 && !instExt)) {
+    $('load-text').textContent = 'Браузер не смог включить 3D-графику (WebGL). Включи «аппаратное ускорение» в настройках браузера или открой сайт в свежем Chrome, Edge, Firefox или Safari.';
+    return;
+  }
+  const divisor = (i, d) => (isGL2 ? gl.vertexAttribDivisor(i, d) : instExt.vertexAttribDivisorANGLE(i, d));
+  const drawInstanced = (n) => (isGL2 ? gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n) : instExt.drawArraysInstancedANGLE(gl.TRIANGLE_STRIP, 0, 4, n));
 
-  const VS = `#version 300 es
-  layout(location=0) in vec2 aCorner;
-  layout(location=1) in vec4 aPos;
-  layout(location=2) in vec4 aEdge;
-  layout(location=3) in float aFlag;
-  uniform vec2 uCam; uniform float uZoom; uniform vec2 uRes; uniform vec2 uGrid;
-  out vec2 vLocal; out vec2 vUV; flat out vec4 vEdge; flat out float vFlag;
+  // Шейдеры на GLSL ES 1.00 — их понимают и WebGL1, и WebGL2
+  const PREC = `#ifdef GL_FRAGMENT_PRECISION_HIGH
+  precision highp float;
+  #else
+  precision mediump float;
+  #endif
+  `;
+  const VS = `
+  attribute vec2 aCorner; attribute vec4 aPos; attribute vec4 aEdge; attribute float aFlag;
+  uniform vec2 uCam; uniform float uZoom; uniform vec2 uRes; uniform vec2 uGrid; uniform vec3 uColors[13];
+  varying vec2 vLocal; varying vec2 vUV; varying vec4 vEdge; varying float vFlag; varying vec3 vHold;
   const float M = 0.44;
   void main(){
-    vLocal = vec2(0.); vUV = vec2(0.); vEdge = vec4(0.); vFlag = 0.;
+    vLocal = vec2(0.); vUV = vec2(0.); vEdge = vec4(0.); vFlag = 0.; vHold = vec3(0.);
     if (aFlag < -0.5) { gl_Position = vec4(-9., -9., 0., 1.); return; }
     vec2 local = mix(vec2(-M), vec2(1.0 + M), aCorner);
     vec2 s = (aPos.xy + local - uCam) * uZoom;
     vec2 ndc = s / uRes * 2.0 - 1.0;
     gl_Position = vec4(ndc.x, -ndc.y, 0., 1.);
     vLocal = local; vUV = (aPos.zw + local) / uGrid; vEdge = aEdge; vFlag = aFlag;
+    if (aFlag > 0.5) vHold = uColors[int(aFlag + 0.5) - 1];
   }`;
-  const FS = `#version 300 es
-  precision highp float;
-  in vec2 vLocal; in vec2 vUV; flat in vec4 vEdge; flat in float vFlag;
-  uniform sampler2D uTex; uniform vec3 uColors[13]; uniform float uZoom;
-  out vec4 o;
+  const FS = PREC + `
+  varying vec2 vLocal; varying vec2 vUV; varying vec4 vEdge; varying float vFlag; varying vec3 vHold;
+  uniform sampler2D uTex; uniform float uZoom;
   float sdBox(vec2 p, vec2 b){ vec2 d = abs(p) - b; return length(max(d, 0.)) + min(max(d.x, d.y), 0.); }
   float smin(float a, float b, float k){ float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
   float tabSd(vec2 q, float sc){ q /= sc; float head = length(q - vec2(0., .225)) - .165; float neck = sdBox(q - vec2(0., .06), vec2(.1, .09)); return smin(head, neck, .04) * sc; }
@@ -81,7 +94,7 @@
     float d = sd(vLocal);
     float a = clamp(0.5 - d / px, 0., 1.);
     if (a <= 0.) discard;
-    vec3 col = texture(uTex, vUV).rgb;
+    vec3 col = texture2D(uTex, vUV).rgb;
     float detail = smoothstep(5., 22., uZoom);
     if (detail > 0.) {
       float e = 0.003;
@@ -94,44 +107,45 @@
       col *= 1.0 - (1.0 - clamp(-d / (1.3 * px), 0., 1.)) * 0.45 * detail;
     }
     if (vFlag > 0.5) {
-      vec3 hc = uColors[int(vFlag + 0.5) - 1];
       float ring = 1.0 - clamp(-d / max(0.06, 2.5 * px), 0., 1.);
-      col = mix(col, hc, ring * 0.85 + 0.06);
+      col = mix(col, vHold, ring * 0.85 + 0.06);
     }
-    o = vec4(clamp(col, 0., 1.) * a, a);
+    gl_FragColor = vec4(clamp(col, 0., 1.) * a, a);
   }`;
-  const BVS = `#version 300 es
-  layout(location=0) in vec2 aCorner;
+  const BVS = `
+  attribute vec2 aCorner;
   uniform vec2 uCam; uniform float uZoom; uniform vec2 uRes; uniform vec4 uRect;
-  out vec2 vUV;
+  varying vec2 vUV;
   void main(){ vec2 w = uRect.xy + aCorner * uRect.zw; vec2 ndc = (w - uCam) * uZoom / uRes * 2. - 1.; gl_Position = vec4(ndc.x, -ndc.y, 0., 1.); vUV = aCorner; }`;
-  const BFS = `#version 300 es
-  precision highp float;
-  in vec2 vUV; uniform sampler2D uTex; uniform vec3 uBoard; uniform float uGhost; out vec4 o;
-  void main(){ vec3 c = mix(uBoard, texture(uTex, vUV).rgb, uGhost); o = vec4(c, 1.); }`;
+  const BFS = PREC + `
+  varying vec2 vUV; uniform sampler2D uTex; uniform vec3 uBoard; uniform float uGhost;
+  void main(){ vec3 c = mix(uBoard, texture2D(uTex, vUV).rgb, uGhost); gl_FragColor = vec4(c, 1.); }`;
 
-  function prog(vs, fs) {
+  function prog(vs, fs, attrs) {
     const mk = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
-    const p = gl.createProgram(); gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+    const p = gl.createProgram(); gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+    attrs.forEach((name, i) => gl.bindAttribLocation(p, i, name));
+    gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
     const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
     for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); u[info.name.replace('[0]', '')] = gl.getUniformLocation(p, info.name); }
     return { p, u };
   }
-  const P = prog(VS, FS), B = prog(BVS, BFS);
+  let P, B;
+  try { P = prog(VS, FS, ['aCorner', 'aPos', 'aEdge', 'aFlag']); B = prog(BVS, BFS, ['aCorner']); }
+  catch (e) { $('load-text').textContent = 'Видеокарта не справилась с графикой стола: ' + e.message; return; }
 
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
-  const vaoP = gl.createVertexArray(), vaoB = gl.createVertexArray();
   const ibuf = gl.createBuffer();
-  gl.bindVertexArray(vaoB); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-  gl.bindVertexArray(vaoP); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, ibuf);
   const S4 = ST * 4;
-  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, S4, 0); gl.vertexAttribDivisor(1, 1);
-  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, S4, 16); gl.vertexAttribDivisor(2, 1);
-  gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, S4, 32); gl.vertexAttribDivisor(3, 1);
-  gl.bindVertexArray(null);
+  function bindQuad() { gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0); }
+  function bindPieces() {
+    bindQuad();
+    gl.bindBuffer(gl.ARRAY_BUFFER, ibuf);
+    [[1, 4, 0], [2, 4, 16], [3, 1, 32]].forEach(([i, size, off]) => { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, size, gl.FLOAT, false, S4, off); divisor(i, 1); });
+  }
+  function unbindPieces() { for (let i = 1; i <= 3; i++) { divisor(i, 0); gl.disableVertexAttribArray(i); } }
   const tex = gl.createTexture();
   let texReady = false;
 
@@ -139,12 +153,15 @@
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
-        const max = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+        const max = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), 8192);
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (w > max || h > max) { const k = max / Math.max(w, h); w = Math.floor(w * k); h = Math.floor(h * k); }
+        // WebGL1 строит мипмапы только для размеров-степеней двойки
+        if (!isGL2) { const pot = (v) => { let p = 1; while (p < v) p *= 2; return Math.min(p, max); }; w = pot(w); h = pot(h); }
         let source = img;
-        if (img.naturalWidth > max || img.naturalHeight > max) {
-          const k = max / Math.max(img.naturalWidth, img.naturalHeight);
-          const c = document.createElement('canvas'); c.width = Math.floor(img.naturalWidth * k); c.height = Math.floor(img.naturalHeight * k);
-          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); source = c;
+        if (w !== img.naturalWidth || h !== img.naturalHeight) {
+          const c = document.createElement('canvas'); c.width = w; c.height = h;
+          const cx = c.getContext('2d'); cx.imageSmoothingQuality = 'high'; cx.drawImage(img, 0, 0, w, h); source = c;
         }
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -157,10 +174,12 @@
         texReady = true; needs = true;
         resolve();
       };
-      img.onerror = () => reject(new Error('Картинка не загрузилась'));
+      img.onerror = () => reject(new Error('Картинка не загрузилась. Проверь интернет и обнови страницу.'));
       img.src = src;
     });
   }
+  canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); toast('Графика перезапускается…'); });
+  canvas.addEventListener('webglcontextrestored', () => location.reload());
 
   // ---------- камера ----------
   const cam = { x: 0, y: 0, z: 40 };
@@ -236,6 +255,14 @@
     order = no;
     buildAll();
   }
+  function toBottom(gid) {
+    const G = groups.get(gid); if (!G) return;
+    const no = new Int32Array(N); let w = 0;
+    for (const p of G.pieces) no[w++] = p;
+    for (let s = 0; s < N; s++) { const p = order[s]; if (groupOf[p] !== gid) no[w++] = p; }
+    order = no;
+    buildAll();
+  }
   function hitTest(wx, wy) {
     const M = PG.TAB.margin;
     for (let s = N - 1; s >= 0; s--) {
@@ -244,7 +271,8 @@
       const u = wx - inst[k], v = wy - inst[k + 1];
       if (u < -M || v < -M || u > 1 + M || v > 1 + M) continue;
       const p = order[s];
-      if (PG.pieceSd(E, p, u, v) < 0.02) return p;
+      // зафиксированные на поле кусочки не берутся: клик по ним двигает стол
+      if (PG.pieceSd(E, p, u, v) < 0.02) return groups.get(groupOf[p]).locked ? -1 : p;
     }
     return -1;
   }
@@ -262,13 +290,14 @@
     groupOf = new Int32Array(m.state.groupOf);
     groups = new Map();
     const g = m.state.groups;
-    for (let i = 0; i < g.length; i += 3) groups.set(g[i], { x: g[i + 1], y: g[i + 2], pieces: [], holder: null, edge: false, flash: false, tx: 0, ty: 0 });
+    const gs = m.state.v === 2 ? 4 : 3;
+    for (let i = 0; i < g.length; i += gs) groups.set(g[i], { x: g[i + 1], y: g[i + 2], pieces: [], holder: null, edge: false, flash: false, tx: 0, ty: 0, locked: gs === 4 && g[i + 3] === 1 });
     for (let p = 0; p < N; p++) { const G = groups.get(groupOf[p]); G.pieces.push(p); if (!G.edge && isEdgePiece(p)) G.edge = true; }
     for (let i = 0; i < m.holders.length; i += 2) { const G = groups.get(m.holders[i]); if (G) G.holder = m.holders[i + 1]; }
     setPlayers(m.players);
     stats = m.stats || {};
-    // порядок: одиночки снизу, большие группы сверху
-    const ids = [...groups.keys()].sort((a, b) => groups.get(a).pieces.length - groups.get(b).pieces.length);
+    // порядок: зафиксированное на поле — в самом низу, дальше одиночки, большие группы сверху
+    const ids = [...groups.keys()].sort((a, b) => { const A = groups.get(a), B2 = groups.get(b); return (B2.locked - A.locked) || (A.pieces.length - B2.pieces.length); });
     order = new Int32Array(N); let w = 0;
     for (const id of ids) for (const p of groups.get(id).pieces) order[w++] = p;
     slot = new Int32Array(N);
@@ -277,6 +306,8 @@
     gl.bindBuffer(gl.ARRAY_BUFFER, ibuf); gl.bufferData(gl.ARRAY_BUFFER, inst, gl.DYNAMIC_DRAW); fullUpload = false;
     document.title = meta.name + ' · Puzzle Angar';
     $('name').textContent = meta.name;
+    $('mode-chip').textContent = meta.mode === 'normal' ? 'Обычный' : 'Реализм';
+    $('mode-chip').title = meta.mode === 'normal' ? 'Кусок на своём месте фиксируется' : 'Никаких подсказок: всё как в жизни';
     updateProgress();
   }
 
@@ -359,6 +390,7 @@
         const G = groups.get(m.g);
         if (dragging && dragging.gid === m.g) dragging = null;
         if (G && m.x !== undefined) { G.x = m.x; G.y = m.y; writeGroup(G); }
+        if (m.locked) { if (G) { G.locked = true; G.holder = null; writeGroup(G); } break; }
         const pl = G && players.get(G.holder);
         toast(pl ? `Этот кусок держит ${pl.name}` : 'Этот кусок сейчас занят');
         break;
@@ -369,6 +401,15 @@
         break;
       }
       case 'drop': onDrop(m); break;
+      case 'arrange': {
+        const a = m.g;
+        for (let i = 0; i < a.length; i += 3) {
+          const G = groups.get(a[i]); if (!G || (dragging && dragging.gid === a[i])) continue;
+          G.x = a[i + 1]; G.y = a[i + 2]; remoteMoving.delete(a[i]); writeGroup(G);
+        }
+        toast((m.by === me ? 'Ты разложил' : m.name + ' разложил') + ' кусочки по порядку');
+        break;
+      }
       case 'cursor': { const c = cursors.get(m.id) || { x: m.x, y: m.y }; c.tx = m.x; c.ty = m.y; c.t = performance.now(); cursors.set(m.id, c); needs = true; break; }
       case 'ping': pings.push({ x: m.x, y: m.y, id: m.id, t: performance.now() }); needs = true; if (m.id !== me) beep(880, 0.08); break;
       case 'chat': addMsg(m); break;
@@ -393,7 +434,18 @@
     }
     if (m.stats) stats = m.stats;
     const fin = groups.get(into);
-    if (m.merges.length) {
+    let justLocked = false;
+    if (m.fin && fin && m.fin[0] === into) {
+      fin.x = m.fin[1]; fin.y = m.fin[2];
+      if (m.fin[3] === 1) { justLocked = true; fin.locked = true; }
+    }
+    if (justLocked) {
+      toBottom(into);
+      fin.flash = true; writeGroup(fin);
+      setTimeout(() => { if (groups.get(into) === fin) { fin.flash = false; writeGroup(fin); } }, 260);
+      if (m.by === me) lockSound(); else if (players.get(m.by)) lockSound(0.35);
+      updateProgress();
+    } else if (m.merges.length) {
       toTop(into);
       fin.flash = true; writeGroup(fin);
       setTimeout(() => { if (groups.get(into) === fin) { fin.flash = false; writeGroup(fin); } }, 260);
@@ -544,6 +596,17 @@
   $('zin').onclick = () => zoomAt(innerWidth / 2, innerHeight / 2, 1.35);
   $('zout').onclick = () => zoomAt(innerWidth / 2, innerHeight / 2, 1 / 1.35);
   $('fit').onclick = fit;
+  let arrangeArmed = null;
+  $('arrange').onclick = () => {
+    if (!arrangeArmed) {
+      toast('Нажми «Разложить» ещё раз: все свободные кусочки встанут рядами вокруг поля');
+      $('arrange').setAttribute('aria-pressed', 'true');
+      arrangeArmed = setTimeout(() => { arrangeArmed = null; $('arrange').setAttribute('aria-pressed', 'false'); }, 3000);
+      return;
+    }
+    clearTimeout(arrangeArmed); arrangeArmed = null; $('arrange').setAttribute('aria-pressed', 'false');
+    send({ t: 'arrange' });
+  };
   $('edges').onclick = () => {
     edgeMode = !edgeMode; $('edges').setAttribute('aria-pressed', edgeMode);
     for (const G of groups.values()) writeGroup(G);
@@ -613,6 +676,17 @@
     og.gain.setValueAtTime(0.25 * vol, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
     o.connect(og).connect(actx.destination); o.start(t); o.stop(t + 0.1);
   }
+  function lockSound(vol = 1) {
+    if (!sound || !actx) return;
+    const t = actx.currentTime;
+    [196, 294].forEach((f, i) => {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'triangle'; o.frequency.setValueAtTime(f, t + i * 0.05);
+      g.gain.setValueAtTime(0.0001, t); g.gain.setValueAtTime(0.22 * vol, t + i * 0.05); g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.05 + 0.18);
+      o.connect(g).connect(actx.destination); o.start(t + i * 0.05); o.stop(t + i * 0.05 + 0.2);
+    });
+    click(vol * 0.6);
+  }
   function beep(freq, dur) {
     if (!sound || !actx) return;
     const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
@@ -672,24 +746,25 @@
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
     // поле сборки
     gl.disable(gl.BLEND);
-    gl.useProgram(B.p); gl.bindVertexArray(vaoB);
+    gl.useProgram(B.p); unbindPieces(); bindQuad();
     gl.uniform2f(B.u.uCam, cam.x, cam.y); gl.uniform1f(B.u.uZoom, cam.z); gl.uniform2f(B.u.uRes, W, H);
     gl.uniform4f(B.u.uRect, 0, 0, cols, rows); gl.uniform3fv(B.u.uBoard, hex2rgb(BGS[bgIdx].board)); gl.uniform1f(B.u.uGhost, ghost ? 0.22 : 0);
     gl.uniform1i(B.u.uTex, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     // кусочки
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.useProgram(P.p); gl.bindVertexArray(vaoP);
+    gl.useProgram(P.p);
     gl.bindBuffer(gl.ARRAY_BUFFER, ibuf);
     if (fullUpload) { gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst); fullUpload = false; dLo = Infinity; dHi = -1; }
-    else if (dHi >= dLo) { gl.bufferSubData(gl.ARRAY_BUFFER, dLo * S4, inst, dLo * ST, (dHi - dLo + 1) * ST); dLo = Infinity; dHi = -1; }
+    else if (dHi >= dLo) { gl.bufferSubData(gl.ARRAY_BUFFER, dLo * S4, inst.subarray(dLo * ST, (dHi + 1) * ST)); dLo = Infinity; dHi = -1; }
     gl.uniform2f(P.u.uCam, cam.x, cam.y); gl.uniform1f(P.u.uZoom, cam.z); gl.uniform2f(P.u.uRes, W, H); gl.uniform2f(P.u.uGrid, cols, rows);
     gl.uniform1i(P.u.uTex, 0);
     const colors = new Float32Array(13 * 3);
     PCOL.forEach((h, i) => colors.set(hex2rgb(h), i * 3)); colors.set([1, 1, 1], 36);
     gl.uniform3fv(P.u.uColors, colors);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, N);
-    gl.bindVertexArray(null);
+    bindPieces();
+    drawInstanced(N);
+    unbindPieces();
     drawOverlay(now);
   }
 
