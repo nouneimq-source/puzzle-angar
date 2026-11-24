@@ -1,0 +1,53 @@
+/* Puzzle Angar — общий стиль.
+   Концепция: ангар ночью — графитовый металл, разметка сигнальным жёлтым, трафаретные надписи. */
+:root {
+  --bg: #121519;
+  --bg-2: #181c21;
+  --panel: #1d2228;
+  --panel-2: #252b33;
+  --line: #313945;
+  --fg: #ebe8e1;
+  --muted: #9097a1;
+  --accent: #ffb51f;
+  --accent-ink: #1a1404;
+  --ok: #4cd68a;
+  --bad: #ff6b5e;
+  --font-display: "Unbounded", "Arial Black", system-ui, sans-serif;
+  --font-body: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --r: 10px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--font-body); }
+button, input, select { font: inherit; color: inherit; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--fg);
+  padding: 9px 16px; border-radius: 8px; cursor: pointer; font-weight: 600;
+  transition: background .15s, border-color .15s, transform .1s;
+}
+.btn:hover { border-color: #46505e; background: #2c333c; }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.primary:hover { background: #ffc44d; }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.ghost { background: transparent; }
+
+input[type=text], input[type=number] {
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; width: 100%;
+}
+input[type=text]:focus, input[type=number]:focus { border-color: var(--accent); outline: none; }
+
+.label { font: 600 11px/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+
+/* полоса «осторожно» */
+.hazard { height: 6px; background: repeating-linear-gradient(-45deg, var(--accent) 0 10px, #15181c 10px 20px); }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

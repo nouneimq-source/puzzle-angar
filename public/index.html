@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Puzzle Angar</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+  body { min-height: 100vh; background:
+    radial-gradient(1200px 500px at 70% -10%, #23303d 0%, transparent 60%),
+    linear-gradient(var(--bg), var(--bg)); }
+  .wrap { max-width: 1180px; margin: 0 auto; padding-left: max(18px, env(safe-area-inset-left)); padding-right: max(18px, env(safe-area-inset-right)); }
+
+  header.top { display: flex; align-items: center; gap: 16px; padding-block: 18px; flex-wrap: wrap; }
+  .logo { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--fg); }
+  .logo b { font: 900 22px/1 var(--font-display); letter-spacing: .02em; }
+  .logo b span { color: var(--accent); }
+  .who { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .who input { width: 170px; padding: 7px 10px; }
+
+  .hero { padding-block: 26px 22px; }
+  .hero h1 { font: 700 clamp(28px, 4.4vw, 50px)/1.08 var(--font-display); margin: 0 0 12px; text-wrap: balance; max-width: 16ch; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .hero p { color: var(--muted); margin: 0; max-width: 58ch; font-size: 16px; }
+
+  .studio { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 18px; padding-bottom: 40px; }
+  @media (max-width: 900px) { .studio { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .card-body { padding: 18px; display: grid; gap: 18px; }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .tab { flex: 1; padding: 14px 10px; background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer; font-weight: 700; color: var(--muted); }
+  .tab[aria-selected=true] { color: var(--fg); border-bottom-color: var(--accent); }
+  .tab.dk[aria-selected=true] { border-bottom-color: #fff; background: linear-gradient(90deg, #000, #fff 400%); }
+  .tab.dk { font-family: var(--font-display); font-weight: 900; letter-spacing: .04em; font-size: 13px; }
+
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 26px 16px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; display: grid; gap: 6px; }
+  .drop:hover, .drop.over { border-color: var(--accent); background: #ffb51f0d; }
+  .drop strong { font-size: 16px; }
+  .drop small { color: var(--muted); }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+  .tile { position: relative; padding: 0; border: 2px solid transparent; border-radius: 10px; overflow: hidden; cursor: pointer; background: var(--bg-2); text-align: left; }
+  .tile canvas { display: block; width: 100%; aspect-ratio: 3/2; }
+  .tile span { display: block; padding: 6px 8px; font-size: 12.5px; font-weight: 600; }
+  .tile i { position: absolute; top: 6px; left: 6px; font: 700 9.5px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; padding: 4px 6px; border-radius: 4px; background: #000c; color: #fff; font-style: normal; }
+  .tile[aria-pressed=true] { border-color: var(--accent); }
+  .dk-intro { padding: 14px; border-radius: 10px; background: linear-gradient(110deg, #000 0 49.5%, #fff 50.5% 100%); display: grid; grid-template-columns: 1fr 1fr; gap: 14px; font-size: 13px; }
+  .dk-intro div:first-child { color: #fff; }
+  .dk-intro div:last-child { color: #000; }
+  .dk-intro b { font: 900 15px/1.2 var(--font-display); display: block; margin-bottom: 4px; }
+
+  .count-row { display: grid; gap: 10px; }
+  .count-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .count-big { font: 700 34px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+  .count-big small { font: 600 13px var(--font-body); color: var(--muted); margin-left: 6px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .presets button { padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2); cursor: pointer; font: 600 12.5px var(--font-mono); font-variant-numeric: tabular-nums; }
+  .presets button[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .hint { color: var(--muted); font-size: 13px; }
+  .hint.warn { color: var(--accent); }
+  .create-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .create-row input { flex: 1 1 200px; }
+  .create-row .btn { flex: 0 0 auto; padding: 11px 20px; }
+
+  .preview { display: grid; grid-template-rows: auto 1fr auto; }
+  .preview-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); gap: 10px; }
+  .preview-stage { position: relative; display: grid; place-items: center; padding: 22px; min-height: 340px; background:
+     linear-gradient(#ffffff06 1px, transparent 1px) 0 0/24px 24px, linear-gradient(90deg, #ffffff06 1px, transparent 1px) 0 0/24px 24px, var(--bg-2); }
+  .preview-stage canvas { max-width: 100%; max-height: 460px; filter: drop-shadow(0 18px 30px #0008); }
+  .preview-empty { color: var(--muted); text-align: center; max-width: 30ch; }
+  .preview-foot { padding: 12px 18px; border-top: 1px solid var(--line); font: 500 12px var(--font-mono); color: var(--muted); display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+  section.rooms { padding-block: 10px 60px; }
+  .sec-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .sec-head h2 { font: 700 22px/1.2 var(--font-display); margin: 0; }
+  .join { display: flex; gap: 8px; }
+  .join input { width: 230px; }
+  .room-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+  .room { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: grid; grid-template-rows: auto 1fr; }
+  .room .thumb { position: relative; aspect-ratio: 16/10; background: var(--bg-2) center/cover no-repeat; }
+  .room .badge { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; }
+  .room .badge span { font: 700 10px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; padding: 5px 7px; border-radius: 4px; background: #000c; color: #fff; }
+  .room .badge .live { background: var(--ok); color: #04210f; }
+  .room .badge .done { background: var(--accent); color: var(--accent-ink); }
+  .room .info { padding: 12px 14px 14px; display: grid; gap: 10px; }
+  .room h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+  .room .meta { display: flex; justify-content: space-between; font: 500 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; border-radius: 3px; background: var(--bg-2); overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .room .acts { display: flex; gap: 8px; }
+  .room .acts a { flex: 1; text-decoration: none; }
+  .empty-rooms { padding: 30px; text-align: center; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); }
+  .busy { position: fixed; inset: 0; background: #0b0d10d9; display: grid; place-items: center; z-index: 50; text-align: center; }
+  .busy b { font: 700 20px var(--font-display); display: block; margin-top: 14px; }
+  .spinner { width: 56px; height: 56px; margin: auto; border-radius: 8px; background: var(--accent); animation: spin 1.1s cubic-bezier(.6,0,.4,1) infinite; }
+  @keyframes spin { 50% { transform: rotate(90deg) scale(.8); border-radius: 50%; } 100% { transform: rotate(180deg); } }
+  footer { padding-block: 24px 40px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<div class="hazard"></div>
+<div class="wrap">
+  <header class="top">
+    <a class="logo" href="/">
+      <svg width="38" height="38" viewBox="0 0 38 38" aria-hidden="true"><path d="M3 17 19 5l16 12v18H3z" fill="#ffb51f"/><path d="M9 35V20h20v15" fill="#121519"/><path d="M12 24h6v3.2a2.2 2.2 0 1 0 0 3.6V35h-6z" fill="#ffb51f"/></svg>
+      <b>PUZZLE <span>ANGAR</span></b>
+    </a>
+    <label class="who"><span class="label">Твоё имя</span><input id="nick" type="text" maxlength="24" autocomplete="nickname"></label>
+  </header>
+
+  <div class="hero">
+    <h1>Собирайте пазлы <em>вместе</em> с друзьями</h1>
+    <p>Загрузи свою картинку или возьми из галереи, выбери от 6 до 100&nbsp;000 кусочков и кинь друзьям ссылку на комнату. Все двигают кусочки одновременно и видят курсоры друг друга.</p>
+  </div>
+
+  <div class="studio">
+    <div class="card">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" id="tab-upload" aria-selected="true" data-tab="upload">Своё фото</button>
+        <button class="tab" role="tab" id="tab-gallery" aria-selected="false" data-tab="gallery">Галерея</button>
+        <button class="tab dk" role="tab" id="tab-darklay" aria-selected="false" data-tab="darklay">DARKLAY</button>
+      </div>
+      <div class="card-body">
+        <div data-pane="upload">
+          <label class="drop" id="drop">
+            <input id="file" type="file" accept="image/*" hidden>
+            <strong>Перетащи картинку сюда</strong>
+            <small>или нажми, чтобы выбрать файл · JPG, PNG, WebP · можно вставить через Ctrl+V</small>
+          </label>
+        </div>
+        <div data-pane="gallery" hidden><div class="tiles" id="tiles-gallery"></div></div>
+        <div data-pane="darklay" hidden style="display:grid;gap:12px">
+          <div class="dk-intro">
+            <div><b>Монолит</b>Сплошной белый или чёрный. Ориентир только форма замков.</div>
+            <div><b>Хаос</b>Шум, фракталы и муар. Глазу не за что зацепиться.</div>
+          </div>
+          <div class="tiles" id="tiles-darklay"></div>
+        </div>
+
+        <div class="count-row">
+          <div class="count-head">
+            <span class="label">Кусочков</span>
+            <div class="count-big" id="count-big">500</div>
+          </div>
+          <input id="count-range" type="range" min="0" max="1000" step="1" aria-label="Количество кусочков">
+          <div class="presets" id="presets"></div>
+          <div class="hint" id="count-hint"></div>
+        </div>
+
+        <div class="create-row">
+          <input id="room-name" type="text" maxlength="60" placeholder="Название комнаты">
+          <button class="btn primary" id="create" disabled>Создать комнату</button>
+        </div>
+        <div class="hint" id="create-hint">Сначала выбери картинку.</div>
+      </div>
+    </div>
+
+    <div class="card preview">
+      <div class="preview-head"><span class="label">Как будет нарезано</span><span class="label" id="grid-label"></span></div>
+      <div class="preview-stage" id="stage"><div class="preview-empty" id="preview-empty">Выбери картинку слева, и здесь появится раскрой на кусочки.</div><canvas id="preview" hidden></canvas></div>
+      <div class="preview-foot"><span id="foot-left">—</span><span id="foot-right"></span></div>
+    </div>
+  </div>
+
+  <section class="rooms">
+    <div class="sec-head">
+      <h2>Комнаты в ангаре</h2>
+      <form class="join" id="join-form"><input id="join-code" type="text" placeholder="Ссылка или код комнаты"><button class="btn">Войти</button></form>
+    </div>
+    <div class="room-grid" id="rooms"></div>
+  </section>
+
+  <footer>Puzzle Angar · комнаты и прогресс сохраняются на сервере, можно выйти и вернуться позже.</footer>
+</div>
+<div class="busy" id="busy" hidden><div><div class="spinner"></div><b id="busy-text">Режем картинку…</b></div></div>
+
+<script src="/geom.js"></script>
+<script src="/gallery.js"></script>
+<script src="/lobby.js"></script>
+</body>
+</html>
