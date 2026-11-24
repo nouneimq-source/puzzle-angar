@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
+const EventEmitter = require('events');
 
 const PORT = process.env.PORT || 3000;
 const PUB = path.join(__dirname, 'public');
@@ -152,7 +153,7 @@ function getRoom(id) {
 }
 
 // ---------- HTTP ----------
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2' };
 
 function sendFile(res, file, cache) {
   fs.stat(file, (err, st) => {
@@ -187,6 +188,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = decodeURIComponent(url.pathname);
   try {
+    if (p.startsWith('/poll/')) return await handlePoll(req, res, p, url);
     if (p === '/api/rooms' && req.method === 'GET') {
       return json(res, 200, [...metas.values()].map(publicMeta).sort((a, b) => (b.online - a.online) || (b.updated - a.updated)));
     }
@@ -236,7 +238,80 @@ const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, 'http://x');
-  const room = getRoom(url.searchParams.get('room') || '');
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+  attach(ws, url.searchParams.get('room') || '');
+});
+// проверочные сигналы: VPN и прокси рвут «молчащие» соединения, а мёртвые мы закрываем сами
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws.isAlive) { ws.terminate(); continue; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch (e) {}
+  }
+}, 25000);
+
+// ---------- запасной канал: HTTP long-polling (для сетей, где WebSocket режут) ----------
+const polls = new Map();
+class PollConn extends EventEmitter {
+  constructor() {
+    super();
+    this.id = crypto.randomBytes(9).toString('hex');
+    this.readyState = 1; this.queue = []; this.waiter = null; this.lastSeen = Date.now();
+    polls.set(this.id, this);
+  }
+  send(s) { if (this.readyState !== 1) return; this.queue.push(s); this.flush(); }
+  respond(extra) {
+    const res = this.waiter; if (!res) return;
+    this.waiter = null; clearTimeout(res._pollTimer);
+    const items = extra ? this.queue.concat(extra) : this.queue;
+    this.queue = [];
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end('[' + items.join(',') + ']');
+  }
+  flush() { if (this.waiter && this.queue.length) this.respond(); }
+  close() {
+    if (this.readyState !== 1) return;
+    this.readyState = 3; polls.delete(this.id);
+    this.respond('{"t":"closed"}');
+    this.emit('close');
+  }
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const c of polls.values()) if (!c.waiter && now - c.lastSeen > 45000) c.close();
+}, 10000);
+
+async function handlePoll(req, res, p, url) {
+  if (p === '/poll/open' && req.method === 'POST') {
+    const rid = url.searchParams.get('room') || '';
+    if (!metas.has(rid)) return json(res, 404, { error: 'Комната не найдена' });
+    const c = new PollConn();
+    attach(c, rid);
+    return json(res, 200, { cid: c.id });
+  }
+  const c = polls.get(url.searchParams.get('cid') || '');
+  if (!c) return json(res, 410, { error: 'Соединение закрыто' });
+  c.lastSeen = Date.now();
+  if (p === '/poll/send' && req.method === 'POST') {
+    const arr = JSON.parse((await readBody(req, 256 * 1024)).toString('utf8'));
+    if (Array.isArray(arr)) for (const m of arr.slice(0, 500)) c.emit('message', JSON.stringify(m));
+    return json(res, 200, { ok: true });
+  }
+  if (p === '/poll/recv' && req.method === 'GET') {
+    if (c.waiter) c.respond();
+    c.waiter = res;
+    res._pollTimer = setTimeout(() => { if (c.waiter === res) { c.lastSeen = Date.now(); c.respond(); } }, 20000);
+    req.on('close', () => { if (c.waiter === res) { c.waiter = null; clearTimeout(res._pollTimer); } });
+    c.flush();
+    return;
+  }
+  return json(res, 404, { error: 'Не найдено' });
+}
+
+// Подключение игрока к комнате. conn — WebSocket или PollConn с тем же интерфейсом.
+function attach(ws, roomId) {
+  const room = getRoom(roomId);
   if (!room) { ws.send(JSON.stringify({ t: 'error', error: 'Комната не найдена' })); return ws.close(); }
   const used = new Set([...room.clients.values()].map(p => p.color));
   let color = 0; while (used.has(color) && color < COLORS - 1) color++;
@@ -326,7 +401,7 @@ wss.on('connection', (ws, req) => {
       setTimeout(() => { if (room.clients.size === 0 && live.get(room.meta.id) === room) { room.save(); live.delete(room.meta.id); } }, 30000);
     }
   });
-});
+}
 
 function saveAll() { for (const r of live.values()) try { r.save(); } catch (e) {} }
 process.on('SIGINT', () => { saveAll(); process.exit(0); });

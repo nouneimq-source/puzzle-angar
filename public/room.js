@@ -282,17 +282,64 @@
 
   // ---------- сеть ----------
   let ws = null, connected = false, firstInit = true, myName = store.get('pa_name') || '';
-  function connect() {
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws?room=' + roomId);
-    ws.onopen = () => { connected = true; $('conn').hidden = true; send({ t: 'hello', name: myName }); };
-    ws.onclose = () => {
-      connected = false; dragging = null;
-      if (deleted) return;
-      $('conn').hidden = false; setTimeout(connect, 1500);
-    };
-    ws.onmessage = (ev) => onMsg(JSON.parse(ev.data));
+  // Связь: сначала WebSocket; если сеть (VPN, прокси, фильтр) его не пропускает — обычные HTTP-запросы
+  let mode = 'ws', wsFails = 0, poll = null;
+  function connect() { if (mode === 'ws') connectWS(); else connectPoll(); }
+  function onOpen() { connected = true; $('conn').hidden = true; send({ t: 'hello', name: myName }); }
+  function onLost() {
+    connected = false; dragging = null;
+    if (deleted) return;
+    $('conn').hidden = false; setTimeout(connect, 1500);
   }
-  const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+  function connectWS() {
+    let openedAt = 0;
+    let sock;
+    try { sock = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws?room=' + roomId); }
+    catch (e) { mode = 'poll'; return connectPoll(); }
+    ws = sock;
+    const timer = setTimeout(() => { if (!openedAt) sock.close(); }, 6000);
+    sock.onopen = () => { openedAt = Date.now(); clearTimeout(timer); onOpen(); };
+    sock.onclose = () => {
+      clearTimeout(timer);
+      if (ws !== sock) return;
+      ws = null;
+      // не открылся или оборвался почти сразу — значит, сеть режет WebSocket
+      if (!openedAt || Date.now() - openedAt < 8000) wsFails++; else wsFails = 0;
+      if (wsFails >= 2 || (!openedAt && wsFails >= 1)) mode = 'poll';
+      onLost();
+    };
+    sock.onmessage = (ev) => onMsg(JSON.parse(ev.data));
+  }
+  async function connectPoll() {
+    const P = { cid: null, alive: true, out: [], timer: null, chain: Promise.resolve() };
+    poll = P;
+    try {
+      const r = await fetch('/poll/open?room=' + roomId, { method: 'POST' });
+      if (r.status === 404) { onMsg({ t: 'error', error: 'Комната не найдена' }); return; }
+      if (!r.ok) throw new Error('open');
+      P.cid = (await r.json()).cid;
+      onOpen();
+      while (P.alive) {
+        const rr = await fetch('/poll/recv?cid=' + P.cid, { cache: 'no-store' });
+        if (!rr.ok) throw new Error('recv');
+        for (const m of await rr.json()) { if (m.t === 'closed') throw new Error('closed'); onMsg(m); }
+      }
+    } catch (e) {
+      if (poll === P) { P.alive = false; poll = null; onLost(); }
+    }
+  }
+  function send(o) {
+    if (mode === 'ws') { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); return; }
+    const P = poll; if (!P || !P.cid) return;
+    P.out.push(o);
+    if (P.timer) return;
+    P.timer = setTimeout(() => {
+      P.timer = null;
+      const batch = P.out; P.out = [];
+      // запросы идут строго по очереди, чтобы «взял — двигал — отпустил» не перепутались
+      P.chain = P.chain.then(() => fetch('/poll/send?cid=' + P.cid, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(batch) })).catch(() => {});
+    }, 70);
+  }
   let deleted = false;
 
   function onMsg(m) {
